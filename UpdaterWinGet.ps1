@@ -1,10 +1,7 @@
-﻿<# 
-Windows Upgrade All Apps
-Supports TUI (terminal) or GUI (Out-GridView) selection.
-Handles winget Id parsing and multi-select issues.
-
-Usage:
-.\Windows-Upgrade-All-Apps.ps1 -Mode TUI -WhatIf
+<# 
+Updater WinGet
+Select packages to upgrade via TUI (terminal) or GUI (Out-GridView).
+Handles IDs, multi-select, and WhatIf mode.
 #>
 
 [CmdletBinding()]
@@ -17,7 +14,7 @@ param(
     [switch]$NoElevate
 )
 
-# ---------- Admin check ----------
+# ---------- Admin ----------
 function Assert-Command { param([string]$Name) try { Get-Command $Name -ErrorAction Stop | Out-Null } catch { throw "Command '$Name' not found." } }
 function Ensure-Elevation { 
     param([switch]$Skip)
@@ -67,7 +64,7 @@ function Get-WinGetUpgrades {
         }
         return $objs | Sort-Object Name,Id,Source -Unique
     }
-    # fallback to text parsing
+    # fallback text
     $text=winget upgrade 2>$null
     if(-not $text){return @()}
     $lines=$text -split "`r?`n" | Where-Object { $_.Trim() }
@@ -108,8 +105,13 @@ function Select-Packages-TUI {
     $choice=Read-Host "Your selection"
     if([string]::IsNullOrWhiteSpace($choice)){return @()}
     $norm=$choice.Trim() -replace '[\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]','-' -replace '[\uFF0C\u060C\u061B\uFE10\uFE11\u3001;；，、]',','
+    
+    # Initialize variable for PS5.1 TryParse
+    $num = 0
     if([int]::TryParse($norm,[ref]$num)){if($num -ge 1 -and $num -le $indexed.Count){return @($indexed[$num-1])} return @()}
     if($norm.ToUpper() -eq 'A'){return $indexed}
+
+    # Multi-select parsing
     $parts=@(); if($norm.IndexOf(',') -ge 0){$parts=$norm.Split(',')} else {$parts=$norm -split '\s+'}
     $seen=@{}; $pickedIdx=@()
     foreach($raw in $parts){$tok=$raw.Trim(); if(-not $tok){continue}
@@ -121,7 +123,7 @@ function Select-Packages-TUI {
     $result=@(); foreach($n in $pickedIdx){$result+=$indexed[$n-1]}; return $result
 }
 
-# ---------- Invoke Upgrades ----------
+# ---------- Upgrade Runner ----------
 function Invoke-Upgrades {
     param($Selected=@(),[switch]$WhatIf)
     $sel=@($Selected)
@@ -138,13 +140,43 @@ function Invoke-Upgrades {
     }
 }
 
-# ---- Main ----
-try{
+# ---- Main with TUI loop ----
+try {
     Assert-Command -Name 'winget'
     Ensure-Elevation -Skip:$NoElevate
-    $upgrades=Get-WinGetUpgrades -IncludeUnknown:$IncludeUnknown -Source $Source
-    if(-not $upgrades -or $upgrades.Count -eq 0){Write-Host "No upgrades available."; return}
-    $selected=if($Mode -eq 'UI'){Select-Packages-UI -Packages $upgrades}else{Select-Packages-TUI -Packages $upgrades}
-    if($null -eq $selected){$selected=@()}else{$selected=@($selected)}
-    Invoke-Upgrades -Selected $selected -WhatIf:$WhatIf
-}catch{Write-Error $_; exit 1}
+
+    $upgrades = Get-WinGetUpgrades -IncludeUnknown:$IncludeUnknown -Source $Source
+    if (-not $upgrades -or $upgrades.Count -eq 0) {
+        Write-Host "No upgrades available." -ForegroundColor Green
+        return
+    }
+
+    # Loop TUI selection until user cancels
+    if ($Mode -eq 'TUI') {
+        while ($true) {
+            $selected = Select-Packages-TUI -Packages $upgrades
+            if (-not $selected -or $selected.Count -eq 0) { 
+                Write-Host "`nNo selection made. Exiting..." -ForegroundColor Yellow
+                break 
+            }
+
+            Invoke-Upgrades -Selected $selected -WhatIf:$WhatIf
+
+            # Refresh upgrades after upgrade/WhatIf
+            $upgrades = Get-WinGetUpgrades -IncludeUnknown:$IncludeUnknown -Source $Source
+            if (-not $upgrades -or $upgrades.Count -eq 0) {
+                Write-Host "`nNo more upgrades available. Exiting..." -ForegroundColor Green
+                break
+            }
+        }
+    } else {
+        # GUI mode
+        $selected = Select-Packages-UI -Packages $upgrades
+        if ($null -eq $selected) { $selected = @() } else { $selected = @($selected) }
+        Invoke-Upgrades -Selected $selected -WhatIf:$WhatIf
+    }
+}
+catch {
+    Write-Error $_
+    exit 1
+}
