@@ -98,4 +98,4 @@ Upgrade only Winget apps
 4. Star the repo ⭐
 
 ## 👤 Author
-Built by Vamp (DT) for the whole world
+Built by [Vamp](https://www.vamp.work/) (DT) for the whole world
